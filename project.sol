@@ -47,6 +47,8 @@ contract NFTicket is ERC1155, Ownable, ERC1155Pausable, ERC1155Burnable, Reentra
     mapping(address => Organizer) public organizers;
     mapping(address => uint256) public ticketsBought;
     mapping(uint256 => BatchInfo) public batchToTokenRange;
+    mapping(uint256 => bool) public isBatchMetadataBurned;
+    mapping(uint256 => string) public batchURIs;
 
     // Events
     event MetadataBurned(string newURI);
@@ -55,6 +57,7 @@ contract NFTicket is ERC1155, Ownable, ERC1155Pausable, ERC1155Burnable, Reentra
     event PriceSet(uint256 indexed tokenId, uint256 price);
     event BatchMinted(uint256 batchNumber, uint256 count, uint256 startTokenId, uint256 endTokenId);
     event BatchListed(uint256 indexed batchNum, uint256 price, uint256 startTokenId, uint256 endTokenId);
+    event BatchMetadataBurned(uint256 indexed batchNum, address indexed burner);
 
     constructor(string memory _initialURI, string memory _postConcertURI) 
         ERC1155(_initialURI)
@@ -183,16 +186,6 @@ contract NFTicket is ERC1155, Ownable, ERC1155Pausable, ERC1155Burnable, Reentra
         emit BatchListed(batchNum, price, startTokenId, endTokenId);
     }
 
-    // Keep the original function for listing individual NFTs
-    function listForSale(uint256 tokenId, uint256 price) external {
-        require(balanceOf(msg.sender, tokenId) == 1, "Not owner");
-        require(msg.sender == nftInfo[tokenId].originalOwner, "Not original owner");
-        require(nftInfo[tokenId].lastSalePrice == 0, "Already listed");
-        
-        nftPrices[tokenId] = price;
-        emit PriceSet(tokenId, price);
-    }
-
     function listForResale(uint256 tokenId, uint256 price) external {
         require(balanceOf(msg.sender, tokenId) == 1, "Not owner");
         require(nftInfo[tokenId].resaleCount < MAX_RESALES, "Max resales reached");
@@ -205,13 +198,25 @@ contract NFTicket is ERC1155, Ownable, ERC1155Pausable, ERC1155Burnable, Reentra
         emit PriceSet(tokenId, price);
     }
 
-    // Metadata Burning
-    function burnMetadata() external onlyOwner {
-        require(!metadataBurned, "Already burned");
-        metadataBurned = true;
-        _setURI(postConcertURI);
-        emit MetadataBurned(postConcertURI);
-    }
+    function burnBatchMetadata(uint256 batchNum) external {
+    require(batchNum > 0 && batchNum < batchCounter, "Invalid batch number");
+    require(!isBatchMetadataBurned[batchNum], "Batch metadata already burned");
+    
+    // Get token range for the batch
+    BatchInfo memory batchInfo = batchToTokenRange[batchNum];
+    uint256 startTokenId = batchInfo.startTokenId;
+    
+    // Check if caller is the original organizer who minted this batch
+    require(msg.sender == nftInfo[startTokenId].originalOwner, "Only the batch creator can burn its metadata");
+    
+    // Mark this batch as burned
+    isBatchMetadataBurned[batchNum] = true;
+    
+    // Store the new URI in a mapping (you'll need to add this mapping)
+    batchURIs[batchNum] = postConcertURI;
+    
+    emit BatchMetadataBurned(batchNum, msg.sender);
+}
 
     // View Functions
     function ownerOf(uint256 tokenId) public view returns (address) {
@@ -223,12 +228,15 @@ contract NFTicket is ERC1155, Ownable, ERC1155Pausable, ERC1155Burnable, Reentra
         require(exists(tokenId), "Nonexistent token");
         
         uint256 batchNum = nftInfo[tokenId].batchNum;
-        if (metadataBurned) {
-            return string(abi.encodePacked(postConcertURI,batchNum.toString(), "/", tokenId.toString()));
-        } else {
-            // Use batch number in the URI format
-            return string(abi.encodePacked(super.uri(tokenId), batchNum.toString(), "/", tokenId.toString()));
+        
+        // If this specific batch has burned metadata, use its custom URI
+        if (isBatchMetadataBurned[batchNum]) {
+            return string(abi.encodePacked(batchURIs[batchNum], batchNum.toString(), ".json"));
         }
+        
+        // Otherwise use the global metadata state
+        string memory base = metadataBurned ? postConcertURI : super.uri(0);
+        return string(abi.encodePacked(base, batchNum.toString(), ".json"));
     }
 
     // New function to get token ID range for a specific batch
